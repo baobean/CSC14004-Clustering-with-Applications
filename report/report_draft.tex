@@ -1,0 +1,575 @@
+\documentclass[12pt]{article}
+
+% --- 1. Core Packages ---
+\usepackage[T5]{fontenc}
+% \usepackage[T1]{fontenc} 
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese, english]{babel} % Supports both if needed
+\usepackage[margin=1in]{geometry}       % Standard Word-style margins
+\usepackage{amsmath, amssymb, amsfonts}            % Essential for Data Science math
+\usepackage{graphicx}                   % For including images
+\usepackage{booktabs}                   % For professional-looking tables
+\usepackage{xcolor}                     % for code coloring
+% \usepackage[T5]{fontenc}
+% \usepackage[utf8]{vietnam}
+
+\usepackage{newpxtext,newpxmath}
+
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage[nameinlink]{cleveref}
+\crefname{figure}{Hình}{Hình}
+\Crefname{figure}{Hình}{Hình}
+\crefname{table}{Bảng}{Bảng}
+\Crefname{table}{Bảng}{Bảng}
+
+
+
+% --- 2. Code Block Setup (listings) ---
+\usepackage{listings}
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\lstset{
+    basicstyle=\ttfamily\small,
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true
+}
+
+% Định nghĩa ngôn ngữ Julia cho package listings
+\lstdefinelanguage{Julia}{
+  morekeywords={abstract,break, begin, case,catch,const,continue,do,else,elseif,
+      end,export,false,for,function,immutable,import,importall,if,in,
+      macro,module,otherwise,quote,return,switch,true,try,type,typealias,
+      using,while,struct,mutable},
+  sensitive=true,
+  alsoother={$},
+  morecomment=[l]\#,
+  morecomment=[n]{\#=}{=\#},
+  morestring=[s]{"}{"},
+  morestring=[m]{'}{'},
+}[keywords,comments,strings]
+
+% --- 3. Document Metadata ---
+\title{Frequent Itemset Mining: AprioriTID Algorithm}
+\author{Nguyễn Đỗ Bảo --- Student ID: [Your ID]}
+\date{\today}
+
+\begin{document}
+
+\maketitle % Generates the title at the top
+
+\section{Nền tảng lý thuyết}
+\label{sec:intro}
+\subsection{Bài toán khai thác tập phổ biến}
+\label{subsec:FIM}
+\subsubsection{Cơ sở dữ liệu giao dịch (transaction database)}
+Cơ sở dữ liệu giao dịch (CSDL) $\mathcal{D}$ bao gồm một tập hợp các giao dịch $T$ $(\mathcal{D} = \{T_1, T_2, \ldots, T_n\})$, trong đó mỗi giao dịch chứa một tập hợp các hạng mục không rỗng (itemset) $\mathcal{I} = \{i_1, i_2, \ldots, i_m\}$ sao cho $T \subseteq \mathcal{I}$ và được liên kết với một định danh giao dịch duy nhất (TID).
+
+\subsubsection{Độ hỗ trợ (support)}
+Độ hỗ trợ của một itemset $X$ đo lường mức độ xuất hiện của $X$ trong trong cơ sở dữ liệu giao dịch $\mathcal{D}$: $sup(X) = |\{T \mid X \subseteq T \land T \in \mathcal{D}\}|$. Có hai cách để biểu diễn độ hỗ trợ là độ hỗ trợ tuyệt đối (absolute support or support count) và độ hỗ trợ tương đối (relative support).
+
+\subsubsection{Tập phổ biến (frequent itemset)}
+Ta nói $X$ là tập phổ biến khi $sup(X) \geq minsup$ trong đó $minsup$ là ngưỡng hỗ trợ tối thiểu. Một itemset chứa k item là một k-itemset. Tập hợp của các tập phổ biến k-itemset được ký hiệu là $L_k$.
+
+\subsubsection{Tập phổ biến đóng (closed frequent itemset) và tập phổ biến tối đại (maximal frequent itemset)}
+Itemset $X$ được gọi là tập đóng (closed itemset) trong tập dữ liệu $D$ nếu không tồn tại một siêu tập hợp (superitemset) $Y$ nào chứa $X$ mà $Y$ có cùng số đếm hỗ trợ với $X$ trong $D$: $\nexists Y \mid (X \subset Y) \land (\sup(X) = \sup(Y))$. Itemset $X$ là tập phổ biến đóng (closed frequent itemset) khi thỏa mãn cả tính đóng và tính phổ biến.
+
+Itemset $X$ được gọi là tập tối đại (maximal itemset) trong tập dữ liệu $D$ nếu không tồn tại một siêu tập hợp (superitemset) $Y$ nào chứa $X$ trong $D$: $\nexists Y \mid (X \subset Y)$. Itemset $X$ là tập phổ biến tối đại (maximal frequent itemset) khi thỏa mãn cả tính tối đại và tính phổ biến.
+
+Mối quan hệ giữa tập phổ biến (FI), tập phổ biến đóng (CFI), và tập phổ biến tối đại (MFI) được biểu diễn như sau: $MFI\subseteq CFI \subseteq FI$
+
+\subsubsection{Tính chất Apriori (downward closure)}
+Tính chất này phát biểu rằng tất cả các tập con không rỗng của một tập hạng mục phổ biến cũng bắt buộc phải là các tập phổ biến. Ngược lại, nếu một tập hạng mục không thỏa mãn điều kiện về độ hỗ trợ tối thiểu, thì không một tập cha nào của nó có khả năng thỏa mãn điều kiện đó. Bản chất đóng hướng xuống này cho phép các thuật toán khai phá cắt tỉa (prune) triệt để không gian tìm kiếm, loại bỏ một cách an toàn bất kỳ các mẫu ứng viên (candidate patterns) lớn hơn nào ngay khi phát hiện ra một tập con nhỏ hơn của nó là không phổ biến.
+
+\subsection{Phân tích thuật toán AprioriTID}
+\label{subsec: AprioriTID}
+Thuật toán tìm tập hạng mục lớn (large itemsets) hoạt động lặp đi lặp lại qua nhiều lượt quét CSDL. Ở lượt đầu tiên, thuật toán đếm độ hỗ trợ (support) của từng hạng mục để tìm các large 1-itemset. Ở các vòng tiếp theo, các large itemset từ vòng trước được dùng làm cơ sở sinh ra các tập ứng viên (candidate itemsets). Thuật toán tiếp tục quét CSDL để đếm support cho ứng viên, lọc ra các large itemset mới và lặp lại quá trình này cho đến khi không tìm thêm được tập nào nữa.
+
+\subsubsection{Ý tưởng cốt lõi}
+Thuật toán Apriori tìm tập phổ biến thông qua quá trình sinh ứng viên và kiểm tra theo từng mức độ dài, trong đó các large k-itemset được sử dụng để khám phá các large (k+1)-itemset. Ý tưởng cốt lõi của AprioriTID dựa trên một biến thể tối ưu hóa gọi là giảm thiểu giao dịch (transaction reduction). Nếu một giao dịch không chứa bất kỳ k-itemset phổ biến nào thì nó cũng không thể chứa bất kỳ (k+1)-itemset phổ biến nào. Do đó, ta loại bỏ các TID này và không cần xét đến chúng trong các lần quét CSDL ở các vòng lặp tiếp theo. Thay vì phải quét lại CSDL gốc nhiều lần, AprioriTID tạo ra một tập dữ liệu mã hóa trung gian, ký hiệu là $\overline{C}_k$ để lưu vết những ứng viên có mặt trong từng giao dịch. Ở các vòng lặp sau, tập $\overline{C}_k$ này có thể trở nên nhỏ hơn rất nhiều so với kích thước của CSDL gốc, giúp tiết kiệm đáng kể chi phí đọc đĩa (I/O).
+
+Đầu tiên, tìm tập hợp 1-itemset phổ biến bằng cách đếm số lần xuất hiện của TID chứa 1-itemset, và thu thập những 1-itemset thỏa mãn minsup. Tập hợp kết quả được ký hiệu là $L_1$. Tiếp theo, $L_1$ được sử dụng để tìm $L_2$, tập hợp các 2-itemset phổ biến, được sử dụng để tìm $L_3$, và cứ thế tiếp tục cho đến khi không còn k-itemset phổ biến nào được tìm thấy nữa.
+
+Các thuật toán đi trước như AIS hay SETM sinh các tập ứng viên trên đường bay (on-the-fly) bằng cách đọc từng giao dịch và mở rộng các tập phổ biến có trong giao dịch đó. Cách này tạo ra vô số ứng viên dư thừa, dẫn đến lãng phí tài nguyên. AprioriTID khắc phục điều này bằng cách sinh ứng viên một cách độc lập thông qua việc nối các tập phổ biến bước trước, tạo ra tập ứng viên nhỏ hơn rất nhiều.
+
+\subsubsection{Cấu trúc dữ liệu chính}
+AprioriTID sử dụng một cấu trúc dữ liệu mảng tuần tự đặc trưng là tập $\overline{C}_k$.  Mỗi phần tử trong $\overline{C}_k$ đại diện cho một giao dịch, có định dạng: \colorbox{black!10}{$\langle \text{TID},\{X_k\}\rangle$}, trong đó $X_k$ là k-itemset xuất hiện trong TID. Nếu một giao dịch không chứa bất kỳ ứng viên nào, nó sẽ không có mục (entry) tương ứng trong $\overline{C}_k$.
+
+Lấy ví dụ minh họa CSDL $\mathcal{D}$ ở \Cref{fig:example} với mã giao dịch (TID) $101$ chứa các mục (items): $\{1, 2, 3, 4\}$. Ngưỡng $\text{minsup} = 2$.
+
+\begin{itemize}
+    \item Ở bước $k=1$, $\bar{C}_1$ sẽ là: $\langle 101, \{\{1\}, \{2\}, \{3\}, \{4\}\} \rangle$.
+    \item Ở bước $k=2$, tập ứng viên $C_2$ chứa $\{1, 2\}, \{1, 4\}, \{1, 5\}, \dots$ (lưu ý mục $\{3\}$ không đạt minsup ở $L_1$ nên các tập chứa $3$ không xuất hiện trong $C_2$). Vì giao dịch $101$ chứa các tổ hợp con hợp lệ nằm trong $C_2$ là $\{1, 2\}, \{1, 4\}, \{2, 4\}$, nên $\bar{C}_2$ cho TID $101$ sẽ là: $\langle 101, \{\{1, 2\}, \{1, 4\}, \{2, 4\}\} \rangle$.
+    \item Ở bước $k=3$, tập ứng viên $C_3$ là $\{\{1, 2, 4\}, \{1, 2, 5\}, \{1, 4, 5\}, \{2, 4, 5\}\}$. Giao dịch $101$ chỉ chứa tổ hợp $\{\{1, 2, 4\}\}$ có mặt trong $C_3$, nên $\bar{C}_3$ cho TID $101$ sẽ là: $\langle 101, \{\{1, 2, 4\}\} \rangle$.
+    \item Ở bước $k=4$, tập ứng viên $C_4$ là $\{\{1, 2, 4, 5\}\}$. Giao dịch $101$ không chứa đầy đủ các mục này, nên TID $101$ sẽ bị loại bỏ hoàn toàn khỏi $\bar{C}_4$.
+\end{itemize}
+
+\subsubsection{Mã giả (Pseudocode)}
+\begin{figure}[h]
+    \noindent 
+    1) \hspace*{0.3em} $L_1 = \{\text{các 1-itemset phổ biến}\};$ \\
+    2) \hspace*{0.3em} $\overline{C}_1 = \text{cơ sở dữ liệu } \mathcal{D};$ \\
+    3) \hspace*{0.3em} \textbf{for} $( k = 2; L_{k-1} \neq \emptyset; k++ )$ \textbf{do begin} \\
+    4) \hspace*{1.5em} $C_k = \text{apriori-gen}(L_{k-1}); \quad \text{// Tập ứng viên mới -- xem Mục 2.1.1}$ \\
+    5) \hspace*{1.5em} $\overline{C}_k = \emptyset;$ \\
+    6) \hspace*{1.5em} \textbf{forall} phần tử $t \in \overline{C}_{k-1}$ \textbf{do begin} \\
+    7) \hspace*{3em} \text{// xác định các itemset ứng viên thuộc $C_k$ có trong giao dịch mang mã định} \\ 
+    \hspace*{4.2em} \text{// danh $t.\text{TID}$} \\
+    \hspace*{4.2em} $C_t = \{c \in C_k \mid (c - c[k]) \in t.\text{set-of-itemsets} \land (c - c[k-1]) \in t.\text{set-of-itemsets}\};$ \\
+    8) \hspace*{3em} \textbf{forall} ứng viên $c \in C_t$ \textbf{do} \\
+    9) \hspace*{4.5em} $c.\text{count}++;$ \\
+    10) \hspace*{2.5em} \textbf{if} $(C_t \neq \emptyset)$ \textbf{then} $\overline{C}_k \mathrel{+}= \langle t.\text{TID}, C_t \rangle;$ \\
+    11) \hspace*{1.5em} \textbf{end} \\
+    12) \hspace*{1.5em} $L_k = \{c \in C_k \mid c.\text{count} \geq \text{minsup}\}$ \\
+    13) \hspace*{0.3em} \textbf{end} \\
+    14) \hspace*{0.3em} $\text{Kết quả} = \bigcup_k L_k$;
+
+    \caption{Algorithm AprioriTid}
+    \label{fig:AprioriTid}
+\end{figure}
+
+\textbf{Giải thích mã giả:}
+1) Tìm tập hợp các tập phổ biến có kích thước bằng 1 ($L_1$);
+2) Khởi tạo $\overline{C}_1 = \mathcal{D}$. Mỗi item trong mỗi giao dịch được xem là một tập 1-itemset, tạo thành định dạng $\langle \text{TID}, \text{tập các 1-itemset} \rangle$;
+3) Bắt đầu vòng lặp tìm các tập phổ biến kích thước $k$ ($k\geq2$). Vòng lặp này sẽ tiếp tục cho đến khi $L_{k-1} = \emptyset$;
+4) Sinh ra tập các ứng viên kích thước $k$ ($C_k$) từ tập phổ biến $L_{k-1}$. Hàm apriori-gen dùng để sinh ra tập các ứng viên k-itemset $C_k$ từ tập phổ biến $L_{k-1}$;
+5) Khởi tạo tập $\overline{C}_k$ rỗng;
+6 - 11)  Duyệt qua $C_{k-1}$ để xác định và tăng biến đếm độ hỗ trợ cho các tập ứng viên thực sự xuất hiện trong mỗi giao dịch. Sau đó tạo $C_k$ chứa các giao dịch có chứa ít nhất một tập (k-1)-itemset phổ biến;
+12) Lọc ra tập phổ biến $L_k$. Chỉ giữ lại những ứng viên trong $C_k$ có $\text{count} \geq \text{minsup}$;
+14) Hợp nhất toàn bộ các tập $L_k$ là danh sách tất cả các itemset phổ biến trong CSDL.
+
+Hàm \texttt{apriori-gen} nhận đầu vào là $L_{k-1}$, tức là tập hợp tất cả các tập large (k-1)-itemset. Hàm trả về một tập hợp gồm các large k-itemset:
+
+\begin{enumerate}
+    \item Đầu tiên, thực hiện hợp (join) tập $L_{k-1}$ với chính nó để sinh ra các tập ứng viên $C_k$.
+    \item Tiếp theo, tỉa (prune) tất cả các tập hạng mục $c \in C_k$ nếu tồn tại bất kỳ (k-1)-itemset nào của $c$ không nằm trong tập $L_{k-1}$.
+\end{enumerate}
+
+\begin{figure}[h]
+    \noindent 
+    1) \hspace*{0.3em} \textbf{insert into} $C_k$ \\
+    2) \hspace*{0.3em} \textbf{select} $p.item_1, p.item_2, \ldots, p.item_{k-1}, q.item_{k-1}$ \\
+    3) \hspace*{0.3em} \textbf{from} $L_{k-1} \ p, L_{k-1} \ q$ \\
+    4) \hspace*{0.3em} \textbf{where} $p.item_1 = q.item_1, \ldots, p.item_{k-2} = q.item_{k-2}, p.item_{k-1} < q.item_{k-1}$; \\
+    \\
+    5) \hspace*{0.3em} \textbf{forall} itemsets $c \in C_k$ \textbf{do} \\
+    6) \hspace*{1.5em} \textbf{forall} $(k-1)$-subsets $s$ of $c$ \textbf{do} \\
+    7) \hspace*{3em} \textbf{if} $(s \notin L_{k-1})$ \textbf{then} \\
+    8) \hspace*{4.2em} \textbf{delete} $c$ from $C_k$;
+    \caption{Hàm apriori-gen}
+    \label{fig:apriori-gen}
+\end{figure}
+
+Lấy ví dụ CSDL $\mathcal{D}$ ở \Cref{fig:example} có $L_2$: \{\{1 2\}, \{1 4\}, \{1 5\}, \{2 4\}, \{4 5\}\}. Sau bước join, $C_3$: \{\{1 2 4\}, \{1 2 5\}, \{1 4 5\}, \{2 4 5\}\}. Bước prune xóa các itemset \{\{1 2 3\}, \{2 4 5\}\} vì các itemset \{\{2 3\}, \{2 5\}\} không nằm trong $L_2$. Do đó chỉ còn lại \{\{1 2 4\}, \{1 4 5\}\} ở $C_3$.
+
+\subsubsection{Phân tích độ phức tạp}
+
+\paragraph{Ký hiệu tham số.}
+\begin{table}[h!]
+\centering
+\begin{tabular}{cl}
+\hline
+\textbf{Ký hiệu} & \textbf{Ý nghĩa} \\
+\hline
+$n$           & Số giao dịch trong CSDL $\mathcal{D}$ \\
+$I$           & Số lượng items phân biệt \\
+$k_{\max}$    & Độ dài tập phổ biến dài nhất \\
+$|C_k|$       & Số ứng viên ở bước $k$ \\
+$|L_k|$       & Số tập phổ biến ở bước $k$ \\
+$w$           & Độ rộng trung bình của giao dịch \\
+$|\bar{C}_k|$ & Tổng số cặp $\langle\text{TID}, \text{itemset}\rangle$ trong $\bar{C}_k$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\paragraph{Bước 1 — Khởi tạo (dòng 1--2).}
+Thuật toán quét toàn bộ CSDL $\mathcal{D}$ một lần duy nhất để tính độ hỗ trợ
+từng 1-itemset và khởi tạo $\bar{C}_1$.
+Độ phức tạp:
+\[
+  T_{\text{init}} = O(n \cdot w).
+\]
+
+\paragraph{Bước 2 — Hàm \texttt{apriori-gen}: sinh ứng viên $C_k$.}
+
+\textit{Bước join (dòng 1--4, \Cref{fig:apriori-gen}).}
+Duyệt tất cả các cặp $(p,q) \in L_{k-1} \times L_{k-1}$; mỗi phép so sánh
+tốn $O(k)$ để kiểm tra $k-2$ item đầu giống nhau và item thứ $k-1$ theo thứ tự:
+\[
+  T_{\text{join}}(k) = O\!\left(|L_{k-1}|^2 \cdot k\right).
+\]
+
+\textit{Bước prune (dòng 5--8, Hình~2).}
+Với mỗi ứng viên $c \in C_k$, sinh $k$ tập con kích thước $(k-1)$ rồi
+kiểm tra membership trong $L_{k-1}$:
+\[
+  T_{\text{prune}}(k) = O\!\left(|C_k| \cdot k \cdot |L_{k-1}|\right).
+\]
+
+Tổng chi phí \texttt{apriori-gen} tại bước $k$:
+\[
+  T_{\text{gen}}(k) = O\!\left(|L_{k-1}|^2 \cdot k \;+\; |C_k| \cdot k \cdot |L_{k-1}|\right).
+\]
+
+\paragraph{Bước 3 — Đếm support qua $\bar{C}_k$ (dòng 6--12, \Cref{fig:AprioriTid}).}
+Đây là điểm then chốt phân biệt AprioriTID với Apriori cơ bản.
+Thay vì quét lại $\mathcal{D}$, thuật toán duyệt cấu trúc trung gian $\bar{C}_{k-1}$:
+với mỗi phần tử $t \in \bar{C}_{k-1}$, xác định tập ứng viên
+$C_t = \{c \in C_k \mid (c - c[k]) \in t.\text{set-of-itemsets}
+                       \;\wedge\; (c - c[k-1]) \in t.\text{set-of-itemsets}\}$,
+tăng $c.\text{count}$ cho mọi $c \in C_t$, rồi ghi $\langle t.\text{TID},\, C_t \rangle$
+vào $\bar{C}_k$ nếu $C_t \neq \emptyset$.
+Chi phí tại bước $k$ phụ thuộc vào kích thước tổng thể $|\bar{C}_k|$:
+\[
+  T_{\text{count}}(k) = O\!\left(|\bar{C}_k| \cdot k\right).
+\]
+Khi $k$ tăng, $|\bar{C}_k|$ giảm nhanh do các giao dịch chứa ít ứng viên hơn,
+thường nhỏ hơn rất nhiều so với $n \cdot |C_k|$ — chi phí nếu quét lại $\mathcal{D}$.
+
+\paragraph{Độ phức tạp thời gian tổng thể.}
+Gộp cả ba bước:
+\[
+\boxed{
+  T_{\text{total}} = O(n \cdot w)
+  + \sum_{k=2}^{k_{\max}}
+    \Bigl[
+      |L_{k-1}|^2 \cdot k
+      \;+\; |C_k| \cdot k \cdot |L_{k-1}|
+      \;+\; |\bar{C}_k| \cdot k
+    \Bigr].
+}
+\]
+
+\paragraph{Độ phức tạp không gian.}
+\begin{table}[h!]
+\centering
+\begin{tabular}{lll}
+\hline
+\textbf{Cấu trúc} & \textbf{Không gian} & \textbf{Ghi chú} \\
+\hline
+CSDL gốc $\mathcal{D}$   & $O(n \cdot w)$        & Lưu trữ đầu vào \\
+$C_k,\; L_k$ mỗi vòng   & $O(|C_k| \cdot k)$   & Tập ứng viên và phổ biến \\
+$\bar{C}_k$ (đặc trưng AprioriTID) & $O(n \cdot |C_k|)$ & Lớn nhất ở $k=2$, giảm dần \\
+\hline
+\end{tabular}
+\end{table}
+
+\noindent\textit{Lưu ý:} $\bar{C}_k$ ở giai đoạn $k = 2$ có thể \textbf{lớn hơn}
+$\mathcal{D}$ gốc vì mỗi giao dịch ánh xạ tới nhiều cặp ứng viên.
+Đây là điểm yếu chính của AprioriTID về bộ nhớ so với Apriori tiêu chuẩn.
+
+\paragraph{Phân tích trường hợp tốt / xấu.}
+\begin{itemize}
+  \item \textbf{Tốt nhất:} $|\bar{C}_k|$ giảm nhanh theo $k$ (minsup cao, dữ liệu thưa).
+        AprioriTID vượt trội nhờ tránh $k_{\max}$ lần quét I/O.
+  \item \textbf{Xấu nhất:} Dữ liệu dày đặc, minsup thấp, $|\bar{C}_k|$ lớn ở mọi bước.
+        Bộ nhớ bị đẩy lên cao; AprioriTID có thể chậm hơn Apriori cơ bản.
+  \item \textbf{Tổng quát:} Độ phức tạp thời gian vẫn là \textit{exponential}
+        trong trường hợp xấu theo số items $|I|$, do số ứng viên tối đa là $O(2^{|I|})$.
+\end{itemize}
+
+\subsubsection{So sánh lịch sử}
+Trong giai đoạn đầu của lĩnh vực khai phá tập phổ biến (FIM), các thuật toán tiên phong như AIS và SETM gặp nhiều hạn chế do phải sinh ứng viên "on-the-fly" (trên đường bay) trong quá trình đọc giao dịch và đòi hỏi việc rà quét, sắp xếp cơ sở dữ liệu gốc liên tục rất tốn kém. Sự ra đời của thuật toán Apriori và AprioriTID vào năm 1994 bởi R. Agrawal và R. Srikant đã tạo ra một bước ngoặt lớn khi giải quyết được những nhược điểm này. Điểm cải tiến mang tính lịch sử của AprioriTID là nó áp dụng hàm sinh ứng viên tiên nghiệm giúp thu hẹp không gian tìm kiếm, đồng thời sử dụng cấu trúc dữ liệu trung gian mã hóa ($\overline{C}_k$) để đếm độ hỗ trợ. Nhờ vậy, thuật toán không cần phải quét lại cơ sở dữ liệu gốc từ vòng lặp thứ hai trở đi, giúp giảm thiểu đáng kể chi phí truy xuất đĩa (I/O) so với các thuật toán tiền nhiệm.
+
+Mặc dù là một bước tiến lớn, AprioriTID vẫn để lại một hạn chế cốt lõi: nó vẫn hoàn toàn phụ thuộc vào mô hình "sinh và kiểm tra" (generate-and-test), sinh ra vô số ứng viên nhỏ không cần thiết và dễ gây quá tải bộ nhớ khi xử lý các tập dữ liệu lớn. Để giải quyết bài toán này, các thế hệ thuật toán FIM sau đó đã thay đổi hoàn toàn cách tiếp cận. Nổi bật là thuật toán FP-Growth ra đời bằng cách áp dụng cấu trúc cây nén FP-tree kết hợp với chiến lược "chia để trị", giúp khai phá trực tiếp các tập phổ biến mà hoàn toàn không cần phải sinh ứng viên. Song song đó, thuật toán Eclat cũng xuất hiện, giải quyết điểm nghẽn bằng cách chuyển sang sử dụng định dạng dữ liệu dọc (vertical data format), cho phép tính toán độ hỗ trợ cực kỳ nhanh chóng và hiệu quả thông qua phép giao các tập mã giao dịch (TID\_set).
+
+\section{Ví dụ minh họa}
+\label{sec: example}
+
+\subsection{Ví dụ 1: Cơ sở}
+
+\begin{figure}[htbp]
+    \centering
+    \renewcommand{\arraystretch}{1.2} % Tăng nhẹ khoảng cách các dòng trong bảng
+
+    % ================= HÀNG 1 =================
+    \begin{minipage}[t]{0.22\textwidth}
+        \centering
+        Database\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Items \\ \hline
+        101 & 1 2 3 4 \\
+        102 & 1 2 \\
+        103 & 1 4 5 \\
+        104 & 1 2 4 5 \\
+        105 & 5 \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.45\textwidth}
+        \centering
+        $\overline{C}_1$\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Tập Itemset \\ \hline
+        101 & \{\{1\}, \{2\}, \{3\}, \{4\}\} \\
+        102 & \{\{1\}, \{2\}\} \\
+        103 & \{\{1\}, \{4\}, \{5\}\} \\
+        104 & \{\{1\}, \{2\}, \{4\}, \{5\}\} \\
+        105 & \{5\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.25\textwidth}
+        \centering
+        $L_1$\\[4pt]
+        \begin{tabular}{|c|c|}
+        \hline
+        Itemset & Support \\ \hline
+        \{1\} & 4 \\
+        \{2\} & 3 \\
+        \{4\} & 3 \\
+        \{5\} & 3 \\ \hline
+        \end{tabular}
+    \end{minipage}
+
+    \vspace{0.8cm} % Khoảng cách giữa hàng 1 và hàng 2
+
+    % ================= HÀNG 2 =================
+    \begin{minipage}[t]{0.22\textwidth}
+        \centering
+        $C_2$\\[4pt]
+        \begin{tabular}{|c|}
+        \hline
+        Itemset \\ \hline
+        \{1 2\} \\
+        \{1 4\} \\
+        \{1 5\} \\
+        \{2 4\} \\
+        \{2 5\} \\
+        \{4 5\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.45\textwidth}
+        \centering
+        $\overline{C}_2$\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Tập Itemset \\ \hline
+        101 & \{\{1 2\}, \{1 4\}, \{2 4\}\} \\
+        102 & \{\{1 2\}\} \\
+        103 & \{\{1 3\}, \{1 5\}\} \\
+        104 & \{\{1 2\}, \{1 5\}, \{2 5\}\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.25\textwidth}
+        \centering
+        $L_2$\\[4pt]
+        \begin{tabular}{|c|c|}
+        \hline
+        Itemset & Support \\ \hline
+        \{1 2\} & 3 \\
+        \{1 4\} & 3 \\
+        \{1 5\} & 2 \\
+        \{2 4\} & 2 \\
+        \{4 5\} & 2 \\ \hline
+        \end{tabular}
+    \end{minipage}
+
+    \vspace{0.8cm} % Khoảng cách giữa hàng 2 và hàng 3
+
+    % ================= HÀNG 3 =================
+    \begin{minipage}[t]{0.22\textwidth}
+        \centering
+        $C_3$\\[4pt]
+        \begin{tabular}{|c|}
+        \hline
+        Itemset \\ \hline
+        \{1 2 4\} \\
+        \{1 2 5\} \\
+        \{1 4 5\} \\
+        \{2 4 5\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.45\textwidth}
+        \centering
+        $\overline{C}_3$\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Tập Itemset \\ \hline
+        101 & \{\{1 2 4\}\} \\
+        103 & \{\{1 4 5\}\} \\
+        104 & \begin{tabular}{@{}l@{}}\{\{1 2 4\}, \{1 2 5\}, \\ \{1 4 5\}, \{2 4 5\}\}\end{tabular} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.25\textwidth}
+        \centering
+        $L_3$\\[4pt]
+        \begin{tabular}{|c|c|}
+        \hline
+        Itemset & Support \\ \hline
+        \{1 2 4\} & 2 \\
+        \{1 4 5\} & 2 \\ \hline
+        \end{tabular}
+    \end{minipage}
+
+    \vspace{0.8cm} % Khoảng cách giữa hàng 3 và hàng 4
+
+    % ================= HÀNG 4 =================
+    \begin{minipage}[t]{0.22\textwidth}
+        \centering
+        $C_4$\\[4pt]
+        \begin{tabular}{|c|}
+        \hline
+        Itemset \\ \hline
+        \{1 2 4 5\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.45\textwidth}
+        \centering
+        $\overline{C}_4$\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Tập Itemset \\ \hline
+        104 & \{1 2 4 5\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.25\textwidth}
+        \centering
+        $L_4$\\[4pt]
+        \begin{tabular}{|c|c|}
+        \hline
+        Itemset & Support \\ \hline
+        & \\ \hline
+        \end{tabular}
+    \end{minipage}
+
+    \caption{Ví dụ minh họa}
+    \label{fig:example}
+\end{figure}
+
+Tập itemset phổ biến từ CSDL ở \Cref{fig:example} là \{\{1\}, \{2\}, \{4\}, \{5\}, \{1 2\}, \{1 4\}, \{1 5\}, \{2 4\}, \{4 5\}, \{1 2 4\}, \{1 4 5\}\}
+
+\subsection{Ví dụ 2: Tình huống đặc biệt --- $\overline{C}_k$ lớn hơn CSDL gốc}
+
+Điểm yếu nổi tiếng nhất của AprioriTID là ở giai đoạn $k=2$, tập $\overline{C}_2$ có thể \textbf{lớn hơn rất nhiều} so với CSDL gốc $\mathcal{D}$. Điều này xảy ra khi dữ liệu dày đặc (dense): mỗi giao dịch chứa nhiều item, sinh ra số lượng cặp ứng viên rất lớn.
+
+Ta thiết kế CSDL $\mathcal{D}'$ gồm 4 giao dịch, mỗi giao dịch chứa 6 item từ tập 7 item, với $\text{minsup} = 2$:
+
+\begin{figure}[htbp]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+
+    % ================= HÀNG 1: DB, C̄_1, L_1 =================
+    \begin{minipage}[t]{0.22\textwidth}
+        \centering
+        Database $\mathcal{D}'$\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Items \\ \hline
+        101 & 1 2 3 4 5 6 \\
+        102 & 1 2 3 4 5 7 \\
+        103 & 1 2 3 4 6 7 \\
+        104 & 1 2 3 5 6 7 \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.45\textwidth}
+        \centering
+        $\overline{C}_1$\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Tập Itemset \\ \hline
+        101 & \{\{1\},\{2\},\{3\},\{4\},\{5\},\{6\}\} \\
+        102 & \{\{1\},\{2\},\{3\},\{4\},\{5\},\{7\}\} \\
+        103 & \{\{1\},\{2\},\{3\},\{4\},\{6\},\{7\}\} \\
+        104 & \{\{1\},\{2\},\{3\},\{5\},\{6\},\{7\}\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.25\textwidth}
+        \centering
+        $L_1$\\[4pt]
+        \begin{tabular}{|c|c|}
+        \hline
+        Itemset & Support \\ \hline
+        \{1\} & 4 \\
+        \{2\} & 4 \\
+        \{3\} & 4 \\
+        \{4\} & 3 \\
+        \{5\} & 3 \\
+        \{6\} & 3 \\
+        \{7\} & 3 \\ \hline
+        \end{tabular}
+    \end{minipage}
+
+    \caption{Ví dụ 2 --- Bước $k=1$: Tất cả 7 item đều phổ biến.}
+    \label{fig:example2-k1}
+\end{figure}
+
+\textbf{Phân tích kích thước $\overline{C}_1$:} CSDL gốc $\mathcal{D}'$ có $4 \times 6 = 24$ mục (item entries). Tập $\overline{C}_1$ cũng chứa đúng $4 \times 6 = 24$ mục (1-itemset entries) vì tất cả item đều phổ biến, không có item nào bị loại.
+
+\textbf{Bước $k=2$:} Do $|L_1| = 7$, hàm apriori-gen sinh ra $C_2 = \binom{7}{2} = 21$ ứng viên 2-itemset. Mỗi giao dịch chứa 6 item, tạo ra $\binom{6}{2} = 15$ cặp con hợp lệ. Tổng số mục trong $\overline{C}_2$:
+
+$$|\overline{C}_2|_{\text{entries}} = 4 \times 15 = 60 \quad \text{vs} \quad |\mathcal{D}'|_{\text{entries}} = 24$$
+
+\textbf{$\overline{C}_2$ lớn gấp 2.5 lần CSDL gốc!} Đây chính là điểm yếu bộ nhớ đặc trưng của AprioriTID trên dữ liệu dày đặc.
+
+\begin{figure}[htbp]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+
+    \begin{minipage}[t]{0.30\textwidth}
+        \centering
+        $C_2$ (21 ứng viên)\\[4pt]
+        \begin{tabular}{|c|}
+        \hline
+        Itemset \\ \hline
+        \{1 2\}, \{1 3\}, \{1 4\} \\
+        \{1 5\}, \{1 6\}, \{1 7\} \\
+        \{2 3\}, \{2 4\}, \{2 5\} \\
+        \{2 6\}, \{2 7\}, \{3 4\} \\
+        \{3 5\}, \{3 6\}, \{3 7\} \\
+        \{4 5\}, \{4 6\}, \{4 7\} \\
+        \{5 6\}, \{5 7\}, \{6 7\} \\ \hline
+        \end{tabular}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.65\textwidth}
+        \centering
+        $\overline{C}_2$ (\textbf{60 entries} --- lớn hơn $\mathcal{D}'$)\\[4pt]
+        \begin{tabular}{|c|l|}
+        \hline
+        TID & Tập Itemset (15 cặp mỗi giao dịch) \\ \hline
+        101 & \begin{tabular}{@{}l@{}}\{\{1 2\},\{1 3\},\{1 4\},\{1 5\},\{1 6\},\{2 3\},\{2 4\},\\ \{2 5\},\{2 6\},\{3 4\},\{3 5\},\{3 6\},\{4 5\},\{4 6\},\{5 6\}\}\end{tabular} \\
+        102 & \begin{tabular}{@{}l@{}}\{\{1 2\},\{1 3\},\{1 4\},\{1 5\},\{1 7\},\{2 3\},\{2 4\},\\ \{2 5\},\{2 7\},\{3 4\},\{3 5\},\{3 7\},\{4 5\},\{4 7\},\{5 7\}\}\end{tabular} \\
+        103 & \begin{tabular}{@{}l@{}}\{\{1 2\},\{1 3\},\{1 4\},\{1 6\},\{1 7\},\{2 3\},\{2 4\},\\ \{2 6\},\{2 7\},\{3 4\},\{3 6\},\{3 7\},\{4 6\},\{4 7\},\{6 7\}\}\end{tabular} \\
+        104 & \begin{tabular}{@{}l@{}}\{\{1 2\},\{1 3\},\{1 5\},\{1 6\},\{1 7\},\{2 3\},\{2 5\},\\ \{2 6\},\{2 7\},\{3 5\},\{3 6\},\{3 7\},\{5 6\},\{5 7\},\{6 7\}\}\end{tabular} \\ \hline
+        \end{tabular}
+    \end{minipage}
+
+    \caption{Ví dụ 2 --- Bước $k=2$: $\overline{C}_2$ có 60 entries, gấp 2.5 lần CSDL gốc (24 entries).}
+    \label{fig:example2-k2}
+\end{figure}
+
+Đếm support từ $\overline{C}_2$, ta được $L_2$ gồm tất cả 21 cặp đều phổ biến (support $\geq 2$):
+
+\begin{itemize}
+    \item Support 4: \{1 2\}, \{1 3\}, \{2 3\}
+    \item Support 3: \{1 4\}, \{1 5\}, \{1 6\}, \{1 7\}, \{2 4\}, \{2 5\}, \{2 6\}, \{2 7\}, \{3 4\}, \{3 5\}, \{3 6\}, \{3 7\}
+    \item Support 2: \{4 5\}, \{4 6\}, \{4 7\}, \{5 6\}, \{5 7\}, \{6 7\}
+\end{itemize}
+
+Các bước tiếp theo ($k=3, 4, 5$) tương tự. Tại $k=3$: $|C_3| = 35$ ứng viên, $|L_3| = 30$ itemset phổ biến. Tại $k=4$: $|L_4| = 18$. Tại $k=5$: $|L_5| = 6$. Tổng cộng thu được \textbf{87 tập phổ biến}.
+
+\textbf{Tại sao đây là tình huống đặc biệt quan trọng?}
+
+\begin{itemize}
+    \item Với dữ liệu dày đặc (dense), mỗi giao dịch có $w$ item sẽ sinh ra $\binom{w}{2}$ cặp trong $\overline{C}_2$. Khi $w$ lớn, $\overline{C}_2$ tăng \textbf{bậc hai} theo $w$, trong khi $\mathcal{D}$ chỉ tăng tuyến tính.
+    \item Đây là lý do chính khiến AprioriTID có thể tiêu tốn nhiều bộ nhớ hơn Apriori chuẩn (vốn quét lại $\mathcal{D}$ gốc), đặc biệt khi minsup thấp và dữ liệu dày đặc.
+    \item Tuy nhiên, ở các bước $k$ lớn hơn, $\overline{C}_k$ giảm nhanh do cơ chế transaction reduction --- các giao dịch không chứa ứng viên bị loại bỏ. Lợi thế của AprioriTID thể hiện rõ ở các bước $k$ cao, khi $\overline{C}_k \ll |\mathcal{D}|$.
+\end{itemize}
+
+\textbf{Kiểm tra chéo:} Liệt kê thủ công --- mỗi giao dịch thiếu đúng 1 item (T101 thiếu 7, T102 thiếu 6, T103 thiếu 5, T104 thiếu 4). Một tập con $S$ có support bằng $4 - |\{$item thiếu nằm trong $S\}|$. Bất kỳ tập con nào cũng xuất hiện trong ít nhất 2 giao dịch (vì chỉ có 4 giao dịch, mỗi giao dịch thiếu đúng 1 item khác nhau từ \{4,5,6,7\}). Riêng các tập con chỉ chứa \{1,2,3\} luôn có support = 4. Kết quả 87 tập phổ biến khớp với kết quả chạy thuật toán.
+
+\end{document}

@@ -1,0 +1,252 @@
+\chapter{The SR-FCA method}\label{ch:method}
+
+This chapter re-derives SR-FCA from first principles. We first fix notation and the problem statement (\S\ref{sec:notation}), give the algorithmic pipeline at a glance (\S\ref{sec:pipeline}), then detail the four technical components -- ONE\_SHOT, TrimmedMeanGD, RECLUSTER and MERGE (\S\ref{sec:components}) -- and the outer loop that combines them (\S\ref{sec:outer-loop}). \S\ref{sec:theory} summarises the theoretical guarantees without repeating the full proofs, and \S\ref{sec:complexity} closes with a complexity comparison against IFCA.
+
+\section{Notation and problem statement}\label{sec:notation}
+
+We follow the notation of~\parencite{vardhan2024srfca}, with minor simplifications where they do not change the meaning.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{ll}
+\toprule
+Symbol & Meaning \\
+\midrule
+$m$                  & number of clients \\
+$i \in [m]$          & client index \\
+$n_i$                & number of training samples on client $i$ \\
+$\mathcal{D}_i$      & client $i$'s data distribution \\
+$F_i(w) = \mathbb{E}_{z\sim\mathcal{D}_i} \ell(w; z)$ & population risk of model $w$ on client $i$ \\
+$f_i(w) = \tfrac{1}{n_i}\sum_{k=1}^{n_i} \ell(w; z_{i,k})$ & empirical risk on client $i$ \\
+$\mathcal{C} = \{G_1,\dots,G_{|\mathcal{C}|}\}$ & a partition of $[m]$; $G_c \subseteq [m]$ is cluster $c$ \\
+$\mathcal{C}^\star$  & ground-truth clustering (unknown to the algorithm) \\
+$K^\star$            & number of ground-truth clusters \\
+$\mathcal{C}_r$      & clustering produced after refinement round $r$ \\
+$w_c^\star$          & ground-truth per-cluster minimiser for cluster $c$ \\
+$w_c$                & current estimate of $w_c^\star$ \\
+$\mathcal{W} \subseteq \mathbb{R}^P$ & bounded parameter domain \\
+$\lambda$            & distance threshold for graph construction \\
+$t$                  & minimum cluster size \\
+$\beta$              & trim fraction per side, $0 \le \beta < 1/2$ \\
+$R$                  & number of REFINE rounds \\
+$T$                  & number of gradient steps inside one call to TrimmedMeanGD \\
+$T_0$                & number of local SGD steps before ONE\_SHOT \\
+$\eta$               & server-side learning rate inside TrimmedMeanGD \\
+\bottomrule
+\end{tabular}
+\caption{Notation used throughout this report; we follow~\parencite{vardhan2024srfca} Section~2.}\label{tab:notation}
+\end{table}
+
+Following~\parencite{vardhan2024srfca} Eq.~2, the per-cluster population loss of a parameter $w$ is the \emph{uniform} average over the clients of that cluster,
+\begin{equation}\label{eq:cluster-loss}
+    \mathcal{F}_c(w) \;=\; \frac{1}{|G_c|} \sum_{i \in G_c} F_i(w),
+\end{equation}
+and the clustered-FL objective is
+\begin{equation}\label{eq:objective}
+    \min_{(\mathcal{C},\ \{w_c\}_{c \in \mathcal{C}})} \;\; \sum_{c \in \mathcal{C}} \mathcal{F}_c(w_c)
+    \qquad\text{subject to}\quad w_c \in \mathcal{W}.
+\end{equation}
+The paper assumes there exists a ground-truth partition $\mathcal{C}^\star = \{G_1^\star,\dots,G_{K^\star}^\star\}$ such that, for every $c$, all clients in $G_c^\star$ share the same population minimiser $w_c^\star = \arg\min_w \mathcal{F}_c(w)$. The choice of \emph{uniform} client averaging in~\eqref{eq:cluster-loss} (rather than the more common $n_i$-weighted average used in FedAvg) is load-bearing for the theory: it is what lets Theorem~4.8 bound the per-cluster estimation error in terms of the number of correctly-assigned clients, independently of how samples are distributed across clients.
+
+SR-FCA does \emph{not} assume $K^\star$ is known, does \emph{not} require warm-start models close to $\{w_c^\star\}$, and tolerates a constant fraction of mis-assigned clients inside each cluster.
+
+\section{Algorithmic pipeline}\label{sec:pipeline}
+
+The high-level pipeline is given in Figure~\ref{fig:pipeline}. From each client's locally-trained model, SR-FCA constructs an initial clustering (ONE\_SHOT), then iteratively refines it. Each REFINE step has three moves: train a robust per-cluster model (TrimmedMeanGD), reassign clients to their nearest cluster model (RECLUSTER), and merge clusters whose models have become close (MERGE).
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    font=\small,
+    node distance=1.0cm and 1.0cm,
+    every path/.style={>={Latex[length=2.2mm,width=1.6mm]}, thick},
+    stage/.style={draw=maincolor!80, fill=maincolor!5, line width=0.6pt, rounded corners=2.5pt,
+                  minimum width=2.3cm, minimum height=1.0cm, align=center,
+                  inner sep=3pt, font=\small},
+    inout/.style={draw=black!60, fill=black!3, line width=0.4pt, rounded corners=2.5pt,
+                  minimum width=2.3cm, minimum height=1.0cm, align=center,
+                  inner sep=3pt, font=\small},
+    flow/.style={->, draw=black!70},
+    loop/.style={->, draw=maincolor!80, dashed},
+    refinebg/.style={draw=maincolor!45, dash pattern=on 3pt off 2pt, rounded corners=6pt,
+                     line width=0.5pt, fill=maincolor!3}
+]
+
+% Top row: clients -> oneshot -> tmgd -> recl
+\node[inout] (clients) {Clients\\[-1pt]\scriptsize $\{1,\dots,m\}$\\[-1pt]\scriptsize local training};
+\node[stage, right=of clients] (oneshot) {\textsc{One\_Shot}\\[-1pt]\scriptsize $\lambda,\ t$};
+\node[stage, right=of oneshot] (tmgd) {\textsc{TMGD}\\[-1pt]\scriptsize $\beta,\ T,\ \eta$};
+\node[stage, right=of tmgd] (recl) {\textsc{Recluster}\\[-1pt]\scriptsize $D(\cdot,\cdot)$};
+
+% Bottom row: merge sits between tmgd and recl columns; out below oneshot
+\node[stage] (merge) at ($(tmgd)!0.5!(recl)+(0,-1.9)$) {\textsc{Merge}\\[-1pt]\scriptsize $\lambda,\ t$};
+\node[inout] (out) at (oneshot |- merge) {Output\\[-1pt]\scriptsize $(\mathcal{C}_R,\{w_c\})$};
+
+% REFINE enclosure around tmgd, recl, merge (on background layer)
+\begin{scope}[on background layer]
+    \node[refinebg, fit=(tmgd) (recl) (merge),
+          inner xsep=8pt, inner ysep=10pt,
+          label={[font=\scriptsize\itshape, text=maincolor!80, anchor=south]north:REFINE (repeat $R$ times)}] {};
+\end{scope}
+
+% Forward flow
+\draw[flow] (clients) -- (oneshot);
+\draw[flow] (oneshot) -- node[above, font=\scriptsize]{$\mathcal{C}_0$} (tmgd);
+\draw[flow] (tmgd) -- node[above, font=\scriptsize]{$\{w_c\}$} (recl);
+\draw[flow] (recl.south) -- node[right, font=\scriptsize]{$\mathcal{C}'$} (merge.east);
+\draw[flow] (merge) -- (out);
+
+% Back-edge: merge -> tmgd, curved outside the forward path
+\draw[loop] (merge.west) to[out=180, in=270]
+    node[pos=0.55, left, font=\scriptsize, text=maincolor!80, align=right] {\itshape $r{\leftarrow}r{+}1,\ r<R$\\[-1pt] $\mathcal{C}_r$}
+    (tmgd.south);
+    
+\end{tikzpicture}
+\caption{SR-FCA pipeline. ONE\_SHOT produces the initial clustering $\mathcal{C}_0$; the REFINE loop (dashed) alternates TrimmedMeanGD, RECLUSTER and MERGE for up to $R$ rounds.}\label{fig:pipeline}
+\end{figure}
+
+\section{Technical components}\label{sec:components}
+
+This section details the four subroutines of the SR-FCA pipeline shown in Figure~\ref{fig:pipeline}. We state each component in the form used by Algorithms~2--5 of~\parencite{vardhan2024srfca} and flag every place our re-implementation departs from that formal specification.
+
+\subsection{ONE\_SHOT: graph construction from pairwise distances}\label{sec:oneshot}
+
+Each client $i$ runs $T_0$ steps of local SGD on $f_i$ from a shared random initialisation $w_0$ and produces a parameter vector $\hat{w}_i$. The server computes pairwise distances $d(\hat{w}_i, \hat{w}_j)$ and builds an undirected graph
+\begin{equation}\label{eq:oneshot-graph}
+    G = ([m], \{(i,j) : d(\hat{w}_i, \hat{w}_j) \le \lambda\}).
+\end{equation}
+The connected components of $G$ of size $\ge t$ are the initial clusters; smaller components are \emph{unclustered} at this stage and will be picked up by RECLUSTER. The threshold $\lambda$ plays the same role as the bandwidth of a kernel clustering method, and the paper suggests picking it from a pairwise-distance histogram -- a procedure we adopt verbatim in Chapter~\ref{ch:experiments}.
+
+Two choices of distance are discussed. For strongly-convex objectives the $\ell_2$ distance on flat parameter vectors,
+\begin{equation}\label{eq:l2}
+    d_{\ell_2}(w, w') \;=\; \lVert w - w' \rVert_2,
+\end{equation}
+is appropriate and is used in our Gaussian smoke test. For neural-network models the parameter space is highly non-convex -- two models at small $\ell_2$ distance can represent very different functions and vice versa -- so the paper introduces the \emph{cross-cluster loss} distance (their eq.~5.1):
+\begin{equation}\label{eq:ccloss}
+    d_\mathrm{cc}(w_i, w_j) \;=\; \tfrac{1}{2}\left[ f_i(w_j) + f_j(w_i) \right].
+\end{equation}
+Equation~\eqref{eq:ccloss} is symmetric by construction and lower-bounded by $\tfrac{1}{2}(f_i(w^\star_i) + f_j(w^\star_j))$; the excess $d_\mathrm{cc}(w_i, w_j) - \tfrac{1}{2}(f_i(w^\star_i) + f_j(w^\star_j))$ is exactly the ``disagreement'' between the two clients' tasks. In our experiments on the 2-layer MLP the pairwise-$\ell_2$ histogram already separates clean intra- and inter-cluster modes (Figure~\ref{fig:pairwise-hist} in Chapter~\ref{ch:experiments}), so we use $d_{\ell_2}$ and keep~\eqref{eq:ccloss} available as a fallback.
+
+\subsection{TrimmedMeanGD: robust per-cluster aggregation}\label{sec:tmgd}
+
+TrimmedMeanGD is presented by~\parencite{vardhan2024srfca} as Algorithm~3 and is a distributed projected-gradient-descent routine in which client gradients are aggregated by coordinate-wise trimmed mean instead of plain mean. Fix a cluster $c$ with client set $G_c \subseteq [m]$, an initial iterate $w_{c,0} \in \mathcal{W}$, a step size $\eta > 0$ and a trim fraction $\beta \in [0, 1/2)$.
+
+\paragraph{Coordinate-wise trimmed mean.} For $m$ vectors $\{g_i\}_{i=1}^m$ in $\mathbb{R}^P$ and fix $\beta$, let $U_k^{(\beta)} \subseteq [m]$ be the set of indices of the $m - 2\lfloor \beta m\rfloor$ values of $\{g_i[k]\}$ that remain after removing the $\lfloor \beta m\rfloor$ smallest and the $\lfloor \beta m\rfloor$ largest at coordinate $k$. The $\beta$-trimmed mean is the vector with coordinate $k$ given by
+\begin{equation}\label{eq:trimmedmean}
+    \operatorname{TrMean}_\beta(\{g_i\})[k] \;=\; \frac{1}{|U_k^{(\beta)}|} \sum_{i \in U_k^{(\beta)}} g_i[k].
+\end{equation}
+Setting $\beta = 0$ recovers the ordinary mean.
+
+\paragraph{Algorithm 3 (paper's formal statement).} For $t = 0, 1, \dots, T-1$:
+\begin{enumerate}
+    \item The server broadcasts $w_{c,t}$ to every client $i \in G_c$.
+    \item Each client returns a stochastic gradient $g_i = \nabla f_i(w_{c,t})$ evaluated on its local empirical risk.
+    \item The server computes
+    \begin{equation}\label{eq:tmgd-step}
+        w_{c,t+1} \;=\; \operatorname{proj}_{\mathcal{W}}\!\bigl(w_{c,t} - \eta \cdot \operatorname{TrMean}_\beta(\{g_i : i \in G_c\})\bigr).
+    \end{equation}
+\end{enumerate}
+Return $w_c = w_{c,T}$. Under the assumptions of §\ref{sec:theory}, Theorem~4.8 of~\parencite{vardhan2024srfca} bounds $\lVert w_c - w_c^\star\rVert$ by $\tilde{\mathcal{O}}(1/\sqrt{n})$ where $n$ is the per-client sample count, for $T$ large enough; the coordinate-wise trimming (Yin et al.~\parencite{yin2018trimmedmean}, Theorem~1) is what gives robustness against up to $\beta |G_c|$ mis-assigned (``adversarial'') clients per coordinate.
+
+\paragraph{Practical adaptation used in experiments.} The paper notes in §5 that, to keep the communication cost comparable to the FedAvg-style baselines, its experiments apply the $\operatorname{TrMean}_\beta$ operator not to single-step client gradients but to the \emph{model updates} produced by each client after $E$ epochs of local SGD -- i.e., each client returns $\tilde{w}_i^{(\tau)} \in \mathcal{W}$ rather than a gradient, and the server aggregates as $w_c^{(\tau+1)} = \operatorname{TrMean}_\beta(\{\tilde{w}_i^{(\tau)} : i \in G_c\})$. This adaptation is \emph{not} analysed in the theory but is the version actually run in the paper's experiments (and in our re-implementation at \texttt{src/federated.py:176}). We adopt it for Chapters~\ref{ch:experiments} and~\ref{ch:part-c} and flag the divergence explicitly.
+
+\subsection{RECLUSTER: nearest-model re-assignment}\label{sec:recluster}
+
+Given the cluster models $\{w_c\}_{c \in \mathcal{C}}$ produced by the preceding TrimmedMeanGD step, Algorithm~4 of~\parencite{vardhan2024srfca} re-assigns each client $i \in [m]$ to the single cluster whose model minimises the chosen distance:
+\begin{equation}\label{eq:recluster}
+    c(i) \;=\; \arg\min_{c \in \mathcal{C}}\; D\!\left(\hat{w}_i, w_c\right),
+\end{equation}
+where $\hat{w}_i$ is client $i$'s current local model and $D$ is either $d_{\ell_2}$ from~\eqref{eq:l2} or $d_{\mathrm{cc}}$ from~\eqref{eq:ccloss}. In the cross-cluster-loss case the assignment reduces to $c(i) = \arg\min_c f_i(w_c)$, i.e., the client picks the cluster model that fits its own data best. The resulting partition $\mathcal{C}'$ may contain empty clusters, which are dropped, and cluster ids are renumbered so that the output partition is contiguous.
+
+\subsection{MERGE: graph over cluster models}\label{sec:merge}
+
+Two clusters may have been separated at ONE\_SHOT time only because their initial local models were noisy; after TrimmedMeanGD each cluster model is much more stable, and two models that end up within $\lambda$ of each other almost certainly represent the same task. Algorithm~5 of~\parencite{vardhan2024srfca} builds the meta-graph
+\begin{equation}\label{eq:merge}
+    H \;=\; (\mathcal{C},\; E_H),\qquad
+    E_H \;=\; \bigl\{\,(c, c') : c \ne c',\ D(w_c, w_{c'}) \le \lambda\,\bigr\},
+\end{equation}
+and returns the connected components of $H$ as the new partition. The model of a merged cluster is the (plain or trim-weighted) mean of its constituents' models. Clusters whose size drops below $t$ after the merge are discarded, matching the size constraint of ONE\_SHOT.
+
+In principle the paper uses an independent threshold for MERGE; re-using the ONE\_SHOT threshold $\lambda$ is a simplification we follow both in Algorithm~\ref{alg:srfca} and in our implementation, and it is the setting under which Theorem~4.14 is proved.
+
+\section{The outer loop}\label{sec:outer-loop}
+
+\begin{algorithm}[h]
+\caption{SR-FCA (Algorithm 1 of~\parencite{vardhan2024srfca}, re-stated)}\label{alg:srfca}
+\begin{algorithmic}[1]
+\State \textbf{Input:} clients $\{f_i\}_{i=1}^m$, parameters $\lambda, t, \beta, R, T, T_0$.
+\State Each client $i$ runs $T_0$ steps of local SGD from shared init $w_0$ $\rightarrow$ $\hat{w}_i$.
+\State $\mathcal{C}_0 \gets \textsc{One\_Shot}(\{\hat{w}_i\}, \lambda, t)$.
+\For{$r = 1, \dots, R$}
+    \For{$c \in \mathcal{C}_{r-1}$}
+        \State $w_c \gets \textsc{TrimmedMeanGD}(c, \beta, T)$.
+    \EndFor
+    \State $\mathcal{C}' \gets \textsc{Recluster}(\{w_c\}, \{\hat{w}_i\}, d)$.
+    \State $\mathcal{C}_r \gets \textsc{Merge}(\mathcal{C}', \lambda, t)$.
+\EndFor
+\State \Return $(\mathcal{C}_R, \{w_c\}_{c \in \mathcal{C}_R})$.
+\end{algorithmic}
+\end{algorithm}
+
+Our implementation in \texttt{src/srfca.py} follows Algorithm~\ref{alg:srfca} line-for-line. The shared initialisation $w_0$ at line~2 is important: it ensures the pairwise distances between $\{\hat{w}_i\}$ are driven by the data heterogeneity rather than the random initialisation. In preliminary testing we confirmed that dropping the shared init (each client initialising independently) severely degrades ONE\_SHOT -- the pairwise histogram loses its bimodal structure.
+
+\section{Theoretical properties}\label{sec:theory}
+
+The paper provides three theoretical guarantees; we state them informally here and defer the precise statements to Appendix~\ref{ch:appendix-theorems}.
+
+\paragraph{Lemma 4.6 (ONE\_SHOT recovery).} Under strong convexity (Assumption~4.3), smoothness (Assumption~4.4) and separation (Assumption~4.5 -- each $w_c^\star$ is at least $\Delta$ away from every other cluster's $w_{c'}^\star$), and for appropriate $\lambda \in (2\alpha n^{-1/2}, \Delta/2)$, ONE\_SHOT recovers $\mathcal{C}^\star$ exactly with high probability.
+
+\paragraph{Theorem 4.8 (per-cluster rate).} After one call to TrimmedMeanGD with $\beta$ matched to the fraction of mis-clustered clients, the estimate $\hat{w}_c$ satisfies
+\begin{equation}\label{eq:srfca-rate}
+    \mathbb{E}\!\left[\lVert \hat{w}_c - w_c^\star \rVert\right] \;=\; \tilde{\mathcal{O}}\!\left(\frac{1}{\sqrt{n}}\right),
+\end{equation}
+with $n$ the per-cluster sample count.
+
+\paragraph{Theorem 4.14 (exact clustering after one REFINE).} Under the same assumptions and with $R=1$, the clustering $\mathcal{C}_1$ produced by Algorithm~\ref{alg:srfca} equals $\mathcal{C}^\star$ with high probability; additional refinement rounds are not needed for \emph{cluster} recovery, though they still improve the per-cluster model error as in~\eqref{eq:srfca-rate}.
+
+The rate~\eqref{eq:srfca-rate} is worse than IFCA's $\tilde{\mathcal{O}}(1/n)$ by a factor of $\sqrt{n}$; this is the price SR-FCA pays for not needing a warm start and not needing $K$. Remark~4.16 of~\parencite{vardhan2024srfca} gives the intuition: IFCA essentially averages out the noise inside each cluster twice (once over clients, once over samples) while SR-FCA's trimmed mean breaks the symmetry once and inherits only the client-level $\sqrt{n}$ rate. We revisit this trade-off in the critical analysis.
+
+\section{Complexity}\label{sec:complexity}
+
+We split the analysis into \emph{time} (compute per execution) and \emph{space} (server-side and client-side memory). Throughout, $m$ is the number of clients, $K$ the number of clusters (a user input for IFCA, discovered by SR-FCA), $P$ the number of model parameters, $T$ the number of server rounds in training, $n$ the samples-per-client, $T_0$ the number of local SGD steps before ONE\_SHOT, and $R$ the number of REFINE rounds.
+
+\subsection{Time complexity}\label{sec:time-complexity}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+Source of work (per execution) & IFCA & SR-FCA \\
+\midrule
+Client local training          & $\mathcal{O}(T\,K\,n\,P)$       & $\mathcal{O}\bigl((T_0 + R\,T)\,n\,P\bigr)$ \\
+Server-side aggregation        & $\mathcal{O}(T\,K\,m\,P)$       & $\mathcal{O}(R\,T\,m\,P)$ \\
+Pairwise distance (ONE\_SHOT)  & $0$                             & $\mathcal{O}(m^2 P)$ once \\
+MERGE meta-graph               & $0$                             & $\mathcal{O}(|\mathcal{C}|^2 P)$ per round \\
+\bottomrule
+\end{tabular}
+\caption{Time complexity (big-$\mathcal{O}$, one execution). Aggregation costs assume a plain or trimmed mean over $m$ clients per coordinate; trimming adds only a constant factor from the sort.}\label{tab:complexity-time}
+\end{table}
+
+The dominant term on the client side is the local-training cost. Under IFCA each client evaluates $K$ candidate models per round (to pick its nearest cluster) and does one local update, giving $\mathcal{O}(T K n P)$; SR-FCA does no per-round reassignment, so each client pays only $(T_0 + R T)$ updates for $\mathcal{O}((T_0 + R T) n P)$. The one place SR-FCA pays a quadratic cost is the ONE\_SHOT pairwise-distance computation, $\mathcal{O}(m^2 P)$. For the paper's setting ($m \le 200$) and ours ($m = 100$) this is negligible compared to training itself, but it becomes a real scaling issue once $m \gg 10^3$ --- a weakness we flag again in the critical analysis (\S\ref{sec:weaknesses}).
+
+\subsection{Space complexity}\label{sec:space-complexity}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+Memory & IFCA & SR-FCA \\
+\midrule
+Server                          & $\mathcal{O}(K\,P)$  & $\mathcal{O}\bigl(m\,P + m^2\bigr)$ \\
+\quad of which: cluster models  & $K\,P$               & $|\mathcal{C}_r|\,P$ (typ.\ $\approx K^\star P$) \\
+\quad of which: ONE\_SHOT cache & $0$                  & $m\,P + m^2$ (local models + distance matrix) \\
+Per-client                      & $\mathcal{O}(P)$     & $\mathcal{O}(P)$ \\
+\bottomrule
+\end{tabular}
+\caption{Space complexity, asymptotic. $|\mathcal{C}_r|$ is the current number of SR-FCA clusters, at most $m$ but typically $\approx K^\star$. The $m^2$ term is the triangular pairwise-distance matrix (scalars, not parameter vectors).}\label{tab:complexity-space}
+\end{table}
+
+The asymmetry here is benign. Client-side memory is identical for both algorithms ($\mathcal{O}(P)$, one model). Server-side, IFCA needs $K$ cluster models at all times whereas SR-FCA holds $|\mathcal{C}_r|$ of them; after the first REFINE round $|\mathcal{C}_r| \approx K^\star$, so the steady-state server footprint is comparable. The $m^2$ scalar distance matrix used in ONE\_SHOT is the only term that scales super-linearly in $m$, and it is freed as soon as ONE\_SHOT finishes.

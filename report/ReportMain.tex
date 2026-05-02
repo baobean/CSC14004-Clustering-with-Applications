@@ -1,0 +1,108 @@
+% Author Name: José Areia 
+% Author Contact: jose.apareia@gmail.com
+% Version: 2.2.13 - 2026/01/06
+% Public Repository: https://github.com/joseareia/ipleiria-thesis
+% Wiki/Getting Help: https://github.com/joseareia/ipleiria-thesis/wiki
+
+%%% Document Options %%%
+\documentclass[
+    language=english,
+    school=hcmus,
+    docstage=final,
+    media=screen,
+    bookprint=false,
+    linkcolor=blue!55!black,
+    chapterstyle=fancy,
+    coverstyle=classic,
+    aiacknowledgement=false,
+    listprefix=false
+]{ReportThesis} % Refer to the Wiki for a list of available options.
+
+%%% Document Version %%%
+\DocumentVersion{1.0.0} % Required only if the 'docstage' is set to 'working'.
+
+%%% Document Metadata %%%
+\input{Metadata/Metadata}
+
+\begin{document}
+
+%%% Front Matter %%%
+\include{Matter/00-Cover}
+\include{Matter/01-Front-Page}
+
+%%% Copyright Statement %%%
+% \include{Matter/02-Copyright}
+
+%%% Roman Numeration %%%
+\pagenumbering{roman}
+
+%%% Acknowledgements %%%
+% \include{Matter/03-Acknowledgements}
+
+%%% Abstract %%%
+\include{Chapters/00-Abstract}
+
+%%% AI Acknowledgement %%%
+% \include{Matter/04-AI}
+
+%%% Table of Contents, List of Figures and List of Tables %%%
+\bookmarktocentry\tableofcontents
+\listoffigures
+\listoftables
+
+%%% Print: Glossary and Acronyms %%%
+% \glossarytoc\printnormalglossary
+% \acronymtoc\printacronymglossary
+% \symboltoc\printsymbolglossary
+
+%%% Arabic Numeration %%%
+\pagenumbering{arabic}
+
+%%% Part divider (matches the Appendices divider style). %%%
+\newcommand{\partdivider}[1]{%
+    \ifthenelse{\equal{\MediaOption}{paper}}{\blankpage}{\clearpage}%
+    \thispagestyle{empty}%
+    \phantomsection
+    \addcontentsline{toc}{chapter}{#1}%
+    \begin{center}
+        \crimsonfont
+        \vspace*{\fill}
+        {\LARGE\fontsize{26}{26}\selectfont\textcolor{maincolor}{#1}\par}
+        \vspace*{\fill}
+    \end{center}
+    \MediaOptionLogicBlank
+}
+
+%%% Chapters (**Insert Yours Here**) %%%
+\partdivider{Part A --- Paper analysis}
+\include{Chapters/01-Introduction}
+\include{Chapters/02-Method}
+\include{Chapters/03-Critical-Analysis}
+
+\partdivider{Part B --- Reproduction}
+\include{Chapters/04-Experimental-Reproduction}
+
+\partdivider{Part C --- Cross-application}
+\include{Chapters/05-Applications}
+
+\include{Chapters/06-Conclusion}
+
+%%% Bibliography %%%
+\renewcommand{\refname}{References}
+\printbibliography[title={\refname},heading=bibintoc]
+
+%%% Appendices: Work that *YOU* Developed %%%
+\appendix
+\input{Matter/08-Appendices}
+\input{Chapters/A-Theoretical-Foundation}
+\input{Chapters/B-User-Guide}
+\input{Chapters/C-Latex-Tutorial}
+
+%%% Annexes: Work that *YOU DID NOT* Develop %%%
+% \input{Matter/09-Annexes}
+% \input{Chapters/Annexes/00-AnnexA}
+
+%%% Back Page %%%
+% \input{Matter/10-Back-Page}
+
+\end{document}

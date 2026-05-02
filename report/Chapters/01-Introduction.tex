@@ -1,0 +1,87 @@
+\chapter{Introduction}\label{ch:introduction}
+
+\section{Problem statement and background}\label{sec:problem-statement}
+
+\subsection*{Why this problem matters}
+
+Many modern machine-learning applications run over data that cannot be moved to a single server. Hospitals cannot share patient records across institutions; mobile keyboards must learn from typing logs that never leave the phone; industrial sensors stream data over bandwidth-limited links. \emph{Federated learning} (FL), introduced by McMahan et al.~\parencite{mcmahan2017fedavg}, is the standard response: clients train locally on their private data and only exchange model updates with a server. The textbook FL algorithm, FedAvg, averages the clients' updates into a single global model.
+
+FedAvg implicitly assumes that all clients see the same data distribution. In practice they do not: hospitals differ in patient demographics, phone users type in different languages, sensors age at different rates~\parencite{li2020heterogeneity}. Under such \emph{statistical heterogeneity}, a single global model is forced into a compromise that can be worse for every client than a purely local model. The question this report asks is: \emph{when clients split into a few macroscopic sub-populations with fundamentally different tasks, how should we train one model per sub-population without knowing the sub-populations in advance?}
+
+\subsection*{The clustered federated learning problem}
+
+\paragraph{Input.}
+\begin{itemize}
+    \item A set of $m$ \emph{clients} indexed by $i \in \{1, \dots, m\}$. Each client $i$ holds a private dataset of size $n_i$ drawn IID from an unknown distribution $\mathcal{D}_i$ and exposes a per-client risk function $f_i(w)$ on a model $w \in \mathbb{R}^P$.
+    \item A model architecture (a parameterisation $w \in \mathbb{R}^P$) shared across clients.
+    \item A communication channel between each client and a central server; raw data never leaves the client.
+\end{itemize}
+
+\paragraph{Output.}
+\begin{itemize}
+    \item A \emph{partition} (clustering) of the clients $\mathcal{C} = \{G_1, \dots, G_K\}$ with $G_c \subseteq \{1,\dots,m\}$ -- ideally with the number of clusters $K$ \emph{discovered} by the algorithm rather than specified by hand.
+    \item One model $w_c \in \mathbb{R}^P$ per cluster, so that each client $i \in G_c$ uses $w_c$ at deployment.
+\end{itemize}
+
+\paragraph{Quality criterion.} The pair $(\mathcal{C}, \{w_c\})$ is good if, in expectation over future test samples, every client's risk under its own cluster model is small -- ideally close to what a centralised learner with access to all the cluster's data could have achieved. Formal versions of this criterion appear in Chapter~\ref{ch:method}; for the introduction we keep it informal.
+
+The problem subsumes two extremes. With $K = 1$ it reduces to ordinary federated learning. With $K = m$ each client trains in isolation. The interesting and practically relevant regime is $K$ small but unknown, with each cluster containing many clients.
+
+\subsection*{Required background}
+
+To follow the rest of the report a reader needs:
+
+\begin{itemize}
+    \item \textbf{Stochastic gradient descent and empirical-risk minimisation} -- the workhorses behind every method considered here.
+    \item \textbf{Federated averaging (FedAvg)}~\parencite{mcmahan2017fedavg} -- the round structure of broadcast / local update / aggregate, plus the standard issues of communication cost, client drift, and stragglers.
+    \item \textbf{Robust aggregation, in particular the coordinate-wise trimmed mean}~\parencite{yin2018trimmedmean} -- used by SR-FCA in place of plain averaging inside a cluster, and the source of the algorithm's tolerance to mis-clustered clients.
+    \item \textbf{Graph-based clustering} -- threshold a similarity matrix to obtain a graph and read clusters off as connected components. SR-FCA uses this as its initialisation step.
+    \item \textbf{Cluster-quality metric} -- misclustering error after Hungarian label matching, $\Pr[\mathcal{C}_R(i) \ne \mathcal{C}^\star(i)]$, the same metric the paper reports in its Table~3.
+\end{itemize}
+
+The theoretical guarantees we restate in Chapter~\ref{ch:method} additionally use $\mu$-strong convexity, $L$-smoothness, and a separation assumption between cluster minimisers; we will state these formally in Chapter~\ref{ch:method} only when they are actually used.
+
+\subsection*{How far the field has gotten}
+
+Work on federated learning under heterogeneity has converged on three broad families of methods.
+
+\begin{enumerate}
+    \item \textbf{Personalised FL} keeps a single global model and fine-tunes it per client (a representative line of work is summarised in~\parencite{li2020heterogeneity}). This is effective when heterogeneity is mild and local data is plentiful, but it cannot represent macroscopic sub-populations whose optimal models differ substantively.
+    \item \textbf{Robust FL} (e.g., trimmed-mean aggregation~\parencite{yin2018trimmedmean}) replaces the FedAvg average with an estimator that tolerates a fraction of arbitrary client updates. This addresses the \emph{aggregation} side of heterogeneity but does not by itself produce different models for different sub-populations.
+    \item \textbf{Clustered FL} explicitly partitions clients and trains one model per cluster -- the regime this report focuses on. The two most influential methods are:
+    \begin{itemize}
+        \item \textbf{CFL} (Sattler et al.~\parencite{sattler2021cfl}) clusters clients top-down by recursively bisecting on the cosine-similarity disagreement of FedAvg gradients.
+        \item \textbf{IFCA} (Ghosh et al.~\parencite{ghosh2022ifca}) maintains $K$ candidate models in parallel; each client picks its nearest candidate by local loss, and the server averages updates within each cluster.
+    \end{itemize}
+    A more recent variant, FedSoft~\parencite{ruan2022fedsoft}, replaces the hard cluster assignment of IFCA with a soft one to handle clients that genuinely sit between sub-populations.
+\end{enumerate}
+
+What the field is missing -- and what the rest of this chapter will sharpen -- is a \emph{bottom-up} clustered-FL method that does not need to be told $K$ in advance and does not rely on a good initialisation of cluster centres. \S\ref{sec:prior-work} states the corresponding limitations of CFL and IFCA precisely; \S\ref{sec:srfca-contrib} introduces SR-FCA~\parencite{vardhan2024srfca}, the paper this report reproduces, as a candidate answer.
+
+\section{Limitations of prior clustered-FL methods}\label{sec:prior-work}
+
+The practical deployment of clustered FL is hampered by two limitations shared, in different forms, by prior methods. We state them here because they motivate SR-FCA's design.
+
+\subsection{IFCA: needs $K$ and a good initialisation}
+
+IFCA~\parencite{ghosh2022ifca} maintains $K$ global models simultaneously. In each round, every client picks the model that minimises its local loss (a hard cluster assignment), performs a local update from that model, and the server then averages the updates inside each cluster. Under strong-convexity and separation assumptions, IFCA converges to the correct clustering and its per-cluster models converge at the information-theoretically optimal rate $\tilde{\mathcal{O}}(1/n)$ in the number of per-cluster samples.
+
+Two weaknesses. First, $K$ must be specified \emph{a priori}. This is awkward: picking $K$ from a held-out set requires running IFCA multiple times, which is precisely the expensive step we wanted to avoid. Second, IFCA's theoretical guarantees assume a \emph{good initialisation} -- the initial $K$ models must already be close enough to the true cluster centres for the hard-assignment step to be informative. In practice this is achieved by random restarts, which wastes compute and is brittle when the number of clusters is large; the paper itself documents this brittleness on CIFAR-10 (where IFCA collapses to $K = 1$ on some seeds, Table~3 of~\parencite{vardhan2024srfca}).
+
+\subsection{CFL: recursive bisection with no size floor}
+
+CFL~\parencite{sattler2021cfl} clusters clients recursively: train a single global model with FedAvg, observe a cosine-similarity disagreement in the final-round gradients of the clients, and split along the disagreement. Applied recursively, this produces a dendrogram whose leaves are the clusters. The weakness is \emph{the stopping rule}. CFL stops splitting when a heuristic criterion on the gradient geometry fires; in practice the criterion is sensitive to the FedAvg learning rate and to the client mini-batch sizes, and tuning it requires separate validation runs per dataset.
+
+\section{Contributions}\label{sec:srfca-contrib}
+
+SR-FCA~\parencite{vardhan2024srfca} proposes a bottom-up alternative. Each client first trains a short local model. The server then builds a \emph{graph} over clients with edges between pairs of clients whose models are within a threshold $\lambda$; the connected components (of size at least $t$) form the initial clustering. An iterative REFINE step -- trimmed-mean federated training, re-clustering, and merging -- sharpens both the per-cluster models and the cluster membership until convergence.
+
+Three contributions, in the authors' own framing:
+
+\begin{enumerate}
+    \item \textbf{Algorithmic:} $K$ is discovered, not specified. The graph construction naturally yields whatever number of components the threshold $\lambda$ induces, and the MERGE step collapses clusters whose trained models end up close after refinement.
+    \item \textbf{Theoretical:} under strong-convexity and smoothness assumptions, SR-FCA achieves \textit{exact} cluster recovery in a single REFINE round and per-cluster model-error $\tilde{\mathcal{O}}(1/\sqrt{n})$ -- slower than IFCA's $\tilde{\mathcal{O}}(1/n)$ rate (Remark 4.16 in~\parencite{vardhan2024srfca}), but without the initialisation assumption and without knowledge of $K$.
+    \item \textbf{Empirical:} on simulated Rotated/Inverted MNIST, real-data FEMNIST, and Shakespeare next-character prediction, SR-FCA matches or exceeds IFCA, CFL and FedSoft~\parencite{ruan2022fedsoft} without hyperparameter tuning on $K$.
+\end{enumerate}
+
+The \emph{trade-off} -- worse statistical rate in exchange for weaker assumptions -- is the most interesting part of the paper, and we return to it in the critical analysis (Chapter~\ref{ch:critical-analysis}).

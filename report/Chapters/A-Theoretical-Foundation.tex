@@ -1,0 +1,36 @@
+\chapter{Theoretical statements}\label{ch:appendix-theorems}
+
+This appendix collects the precise statements of the SR-FCA guarantees, phrased as they appear in~\parencite{vardhan2024srfca} with minor notational simplifications. Proofs are not reproduced; we give short intuitive sketches only.
+
+\section*{Assumptions}
+
+\begin{itemize}
+    \item \textbf{A4.3 (Strong convexity).} Each client risk $f_i$ is $\mu$-strongly convex on the parameter domain.
+    \item \textbf{A4.4 (Smoothness).} Each client risk $f_i$ has $L$-Lipschitz gradients.
+    \item \textbf{A4.5 (Separation).} For every pair of ground-truth minimisers, $\lVert w_c^\star - w_{c'}^\star \rVert \ge \Delta$ for some $\Delta > 0$ bounded below by a function of $(\mu, L, n, m)$.
+\end{itemize}
+
+\section*{Lemma 4.6 (ONE\_SHOT recovery, informal)}
+
+Under A4.3--A4.5 and any $\lambda \in (c_1 \alpha n^{-1/2}, \Delta - c_1 \alpha n^{-1/2})$ for a universal constant $c_1$ and a sub-Gaussian parameter $\alpha$ bounding the per-client empirical-risk gradient noise, ONE\_SHOT produces a partition equal to $\mathcal{C}^\star$ with probability at least $1 - \exp(-c_2 n)$.
+
+\paragraph{Intuition.} Each client's local minimiser $\hat{w}_i$ concentrates around its cluster's $w_c^\star$ at rate $n^{-1/2}$ (Azuma-style). Two clients in the same cluster have $\lVert \hat{w}_i - \hat{w}_j\rVert$ bounded by twice the concentration radius; two clients in different clusters have $\lVert \hat{w}_i - \hat{w}_j\rVert \ge \Delta - 2 \times \text{concentration radius}$. Any $\lambda$ strictly between the two ranges works.
+
+\section*{Theorem 4.8 (per-cluster rate, informal)}
+
+Fix a cluster $c$ with $m_c$ member clients and $n$ samples each. After one call to $\textsc{TrimmedMeanGD}(\beta, T)$ with $T$ chosen as a function of $(\mu, L, \epsilon)$ and $\beta \ge $ fraction of mis-clustered clients in $c$, the resulting estimate $\hat{w}_c$ satisfies
+\[
+    \mathbb{E}\lVert \hat{w}_c - w_c^\star \rVert \;\le\; \tilde{\mathcal{O}}\!\left(\frac{\alpha}{\sqrt{m_c n}} + \beta \cdot \frac{\alpha}{\sqrt{n}}\right).
+\]
+
+\paragraph{Intuition.} The first term is the usual federated-SGD rate, scaling jointly in clients and samples. The second is the trimming-induced bias: removing $\beta m_c$ coordinates per round introduces a constant-factor-$\beta$ additive error relative to a single client's rate. When $\beta \to 0$ the second term vanishes and we recover the standard SGD rate.
+
+\section*{Theorem 4.14 (exact clustering after one REFINE, informal)}
+
+Under A4.3--A4.5 and Lemma 4.6's $\lambda$ condition, $R = 1$ is sufficient: the clustering $\mathcal{C}_1$ returned by Algorithm~1 of the paper equals $\mathcal{C}^\star$ with probability $1 - \exp(-c_3 n)$.
+
+\paragraph{Intuition.} ONE\_SHOT already recovers $\mathcal{C}^\star$ w.h.p.\ by Lemma 4.6, and the REFINE step only strengthens it: TrimmedMeanGD tightens the cluster-model estimates, so RECLUSTER's nearest-model assignment cannot move any client out of its correct cluster, and MERGE does not fire because the cluster-model gap remains above $\lambda$. Additional REFINE rounds improve the per-cluster \emph{estimation} error per Theorem 4.8 but do not change the clustering.
+
+\section*{Remark 4.16 (rate gap to IFCA)}
+
+SR-FCA's per-cluster rate is $\tilde{\mathcal{O}}(1/\sqrt{n})$ while IFCA's is $\tilde{\mathcal{O}}(1/n)$. The $\sqrt{n}$ factor comes from TrimmedMeanGD's client-level robustness: trimming averages out mis-clustered clients at a cost of one-per-round, whereas IFCA's hard assignment effectively uses only the correctly-assigned clients once it has converged.

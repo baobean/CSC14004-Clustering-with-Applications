@@ -1,0 +1,13 @@
+%%% Fonts %%%
+% Note: no \usepackage[T1]{fontenc} -- XeLaTeX + fontspec handles encoding natively.
+\usepackage{fvextra} % Enhanced customisation of verbatim environments.
+\usepackage[style=english,autostyle=false]{csquotes} % Context-sensitive quotation marks.
+\usepackage{fontspec} % Required for custom fonts with XeLaTeX or LuaLaTeX.
+\usepackage{unicode-math} % XeLaTeX-native math; pairs cleanly with Libertinus.
+
+\linespread{1.2} % Slightly increase line spacing.
+\setmainfont{Libertinus Serif}[Ligatures=TeX]
+\setmathfont{Libertinus Math}
+\newcommand{\garamondfont}{\fontspec{EB Garamond}}
+\newcommand{\latofont}{\fontspec{Lato}}
+\newcommand{\crimsonfont}{\rmfamily}

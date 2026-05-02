@@ -1,0 +1,12 @@
+\thispagestyle{plain}
+
+\pdfbookmark[1]{Abstract}{abstract}
+\chapter*{Abstract}
+
+This report studies SR-FCA (\textit{Successive Refine Federated Clustering Algorithm}, Vardhan, Ghosh and Mazumdar, TMLR~02/2024), a bottom-up algorithm for clustered federated learning. SR-FCA discovers the number of clusters $K$ from a pairwise-distance graph over locally trained client models instead of taking it as input, and therefore removes the two main practical obstacles of IFCA: the need to know $K$ in advance and the need for a good initialisation.
+
+We re-implement the full SR-FCA pipeline in pure PyTorch: ONE\_SHOT clustering on pairwise $\ell_2$ distances between locally trained client models, followed by $R$ iterations of REFINE = TrimmedMeanGD $\to$ RECLUSTER $\to$ MERGE, with the metrics used in the paper (test accuracy and misclustering error after Hungarian matching). Experiments run on a single laptop CPU on a 2-layer MLP with $m = 100$ clients, $n = 600$ samples per client, at the paper's full MNIST configuration ($T = 280$ outer rounds, $E = 2$ local epochs, $R = 2$ REFINE rounds). The five baseline methods (Local, Global, CFL, LOCAL-KMeans, IFCA) are not re-trained: their values are quoted verbatim from Tables~2 and~3 of the paper as reference points alongside the SR-FCA row that we produce.
+
+On Rotated-MNIST ($K^\star = 4$) and Inverted-MNIST ($K^\star = 2$), SR-FCA recovers the ground-truth clustering with zero misclustering error on every seed and reaches $93.02 \pm 0.17\,\%$ and $92.95 \pm 0.18\,\%$ test accuracy respectively, against the paper's $91.66 \pm 0.13\,\%$ and $92.03 \pm 0.30\,\%$. A self-designed ablation reproducing Table~5 of the paper -- accuracy after ONE\_SHOT vs.\ after one vs.\ two REFINE rounds on MNIST-rotated -- gives $22.25 \to 91.72 \to 93.08\,\%$ across $R = 0/1/2$, confirming that iterative refinement is the dominant source of accuracy and that ONE\_SHOT alone already recovers the correct clustering. The method is then evaluated on Fashion-MNIST -- a dataset the authors did not study -- with rotation-based ($K^\star = 4$, $83.96 \pm 0.30\,\%$) and inversion-based ($K^\star = 2$, $84.00 \pm 0.22\,\%$) splits, both with zero misclustering, demonstrating that the clustering primitive is robust to the source of heterogeneity.
+
+\MediaOptionLogicBlank
